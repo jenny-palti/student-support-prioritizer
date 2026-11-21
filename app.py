@@ -68,7 +68,7 @@ with phq_tab:
         st.write("No individual item scored high.")
 
     if not protocol["crisis"] and reasons:
-        if st.button("Write a short plain-language note"):
+        if st.button("Summarize the high-scoring questions"):
             with st.spinner("Writing the note..."):
                 note = main.explain_reasons(level, reasons, get_explainer_model())
             if note:
