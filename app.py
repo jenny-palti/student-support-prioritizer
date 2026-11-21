@@ -204,3 +204,11 @@ with prescreen_tab:
         "Not suggested does not mean no risk. If a student mentions self-harm, do not "
         "wait for this tool: follow the crisis protocol. The counselor decides."
     )
+
+    st.caption(
+        "Next step: if the student is invited, complete the PHQ-9 in the first tab. "
+        "That assigns the follow-up level, from 1 to 6."
+    )
+    with st.expander("The six follow-up levels"):
+        for number, info in main.LEVEL_INFO.items():
+            st.write(f"Level {number}: {info['label']} (Protocol {info['protocol']})")
