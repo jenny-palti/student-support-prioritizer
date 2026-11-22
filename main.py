@@ -12,6 +12,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 PHQ_ITEM_COLUMNS = [f"phq{i}" for i in range(1, 10)]
+GAD_ITEM_COLUMNS = [f"gad{i}" for i in range(1, 8)]
+PSS_ITEM_COLUMNS = [f"pss{i}" for i in range(1, 11)]
+PSS_REVERSED_ITEMS = [4, 5, 7, 8]
 
 PHQ_NAMES = {
     1: "Little interest or pleasure in doing things",
@@ -119,6 +122,39 @@ def severity_band(total: int) -> str:
     return "Severe"
 
 
+def gad7_band(total: int) -> str:
+    if total <= 4:
+        return "minimal range"
+    if total <= 9:
+        return "mild range"
+    if total <= 14:
+        return "moderate range"
+    return "severe range"
+
+
+def pss10_band(total: int) -> str:
+    if total <= 13:
+        return "low range"
+    if total <= 26:
+        return "moderate range"
+    return "high range"
+
+
+def score_gad7(values: dict) -> dict:
+    total = sum(values[f"gad{i}"] for i in range(1, 8))
+    return {"total": total, "max": 21, "band": gad7_band(total)}
+
+
+def score_pss10(values: dict) -> dict:
+    total = 0
+    for i in range(1, 11):
+        answer = values[f"pss{i}"]
+        if i in PSS_REVERSED_ITEMS:
+            answer = 4 - answer
+        total += answer
+    return {"total": total, "max": 40, "band": pss10_band(total)}
+
+
 def assign_level(item9: int, total: int) -> int:
     if item9 == 3:
         return 1
@@ -170,30 +206,53 @@ def explain_reasons(level: int, reasons: list, model) -> str | None:
         return NOTE_UNAVAILABLE
 
 
-
 def add_phq_columns(df: pd.DataFrame) -> pd.DataFrame:
     data = df.copy()
     data["phq_total"] = data[PHQ_ITEM_COLUMNS].sum(axis=1)
     data["phq_band"] = data["phq_total"].apply(severity_band)
     data["phq10_plus"] = (data["phq_total"] >= 10).astype(int)
+    data["item9_positive"] = (data["phq9"] >= 1).astype(int)
     data["level"] = [assign_level(a, t) for a, t in zip(data["phq9"], data["phq_total"])]
     data["reasons"] = data.apply(get_reasons, axis=1)
     return data
 
 
-FEATURE_COLUMNS = (
-    ["life_satisfaction"]
-    + [f"{name}_yesterday" for name in ["happy", "laugh", "learn", "enjoy", "worried", "angry", "stress", "lonely"]]
-    + [f"pss{i}" for i in range(1, 11)]
-    + [f"gad{i}" for i in range(1, 8)]
-)
+FEATURE_COLUMNS = PSS_ITEM_COLUMNS + GAD_ITEM_COLUMNS
 GROUP_COLUMNS = ["gender", "ses", "ethnicity"]
-CUTOFF = 0.35
+
+WAVE_BOUNDARIES = {1: 0.50, 2: 0.30}
+PRIORITISE_THRESHOLD = WAVE_BOUNDARIES[2]
+
+WAVES = {
+    1: {
+        "label": "First wave",
+        "screening": "Immediately administer PHQ-9.",
+        "session": "Immediately invite for a session and administer C-SSRS.",
+    },
+    2: {
+        "label": "Second wave",
+        "screening": "Immediately administer PHQ-9.",
+        "session": "Invite for a session and administer C-SSRS after the first wave, guided by the results of those assessments.",
+    },
+    3: {
+        "label": "Third wave",
+        "screening": "PHQ-9 offered as part of standard screening.",
+        "session": "A session if the PHQ-9 indicates one, or if the student asks.",
+    },
+}
+
+
+def assign_wave(probability: float) -> int:
+    if probability >= WAVE_BOUNDARIES[1]:
+        return 1
+    if probability >= WAVE_BOUNDARIES[2]:
+        return 2
+    return 3
 
 
 def prepare_features_and_target(df: pd.DataFrame):
     X = df[FEATURE_COLUMNS]
-    y = df["phq10_plus"]
+    y = df["item9_positive"]
     groups = df[GROUP_COLUMNS]
     return X, y, groups
 
@@ -211,15 +270,37 @@ def build_model() -> Pipeline:
     )
 
 
-def evaluate_model(model, X_test, y_test, cutoff: float = CUTOFF):
+def train_model(model, X_train, y_train):
+    model.fit(X_train, y_train)
+    return model
+
+
+def evaluate_model(model, X_test, y_test, cutoff: float = PRIORITISE_THRESHOLD):
     probabilities = model.predict_proba(X_test)[:, 1]
     predictions = (probabilities >= cutoff).astype(int)
-    print(classification_report(y_test, predictions, target_names=["under 10", "10 or more"]))
-    return predictions
+    print(classification_report(y_test, predictions, target_names=["item 9 = 0", "item 9 above 0"]))
+    return probabilities, predictions
+
+
+def wave_summary(probabilities, y_true) -> None:
+    table = pd.DataFrame(
+        {"wave": [assign_wave(p) for p in probabilities], "answered_above_0": list(y_true)}
+    )
+    summary = table.groupby("wave").agg(
+        students=("answered_above_0", "size"),
+        answered_above_0=("answered_above_0", "sum"),
+    )
+    summary["share_of_students"] = summary["students"] / len(table)
+    summary["rate_within_wave"] = summary["answered_above_0"] / summary["students"]
+    print(summary.round(2))
+    print()
+
 
 def save_model(model, path: str = "models/prescreen_model.joblib") -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    joblib.dump({"model": model, "cutoff": CUTOFF, "features": FEATURE_COLUMNS}, path)
+    joblib.dump(
+        {"model": model, "wave_boundaries": WAVE_BOUNDARIES, "features": FEATURE_COLUMNS}, path
+    )
 
 
 def load_model(path: str = "models/prescreen_model.joblib") -> dict:
@@ -235,15 +316,14 @@ def recall_by_group(y_true, pred, groups_df) -> None:
     for col in groups_df.columns:
         summary = check.groupby(col).agg(
             students=("true", "size"),
-            truly_10plus=("true", "sum"),
+            truly_positive=("true", "sum"),
             caught=("caught", "sum"),
             invited_rate=("invited", "mean"),
         )
-        summary["recall"] = summary["caught"] / summary["truly_10plus"]
+        summary["recall"] = summary["caught"] / summary["truly_positive"]
         print(col)
         print(summary.round(2))
         print()
-
 
 
 def load_data(file_path: str) -> pd.DataFrame:
@@ -264,26 +344,23 @@ def inspect_data(df: pd.DataFrame) -> None:
     print(df.describe().T.to_string())
 
 
-
-def split_data(X, y, groups):
-    return train_test_split(X, y, groups, test_size=0.2, random_state=42, stratify=y)
-
-
-def train_model(model, X_train, y_train):
-    model.fit(X_train, y_train)
-    return model
-
-
-
 def main():
     df = add_phq_columns(load_data("data/DATASET-Raw_data_clean.csv"))
+
+    print("Students in the data:", len(df))
+    print("Answered above 0 on item 9:", int(df["item9_positive"].sum()))
+    print()
+
     X, y, groups = prepare_features_and_target(df)
     X_train, X_test, y_train, y_test, groups_train, groups_test = split_data(X, y, groups)
 
     model = train_model(build_model(), X_train, y_train)
-    predictions = evaluate_model(model, X_test, y_test)
+    probabilities, predictions = evaluate_model(model, X_test, y_test)
 
-    print("Results by group (test part)")
+    print("Waves on the test part")
+    wave_summary(probabilities, y_test)
+
+    print("Waves 1 and 2 by group (test part)")
     recall_by_group(y_test, predictions, groups_test)
 
     save_model(model)

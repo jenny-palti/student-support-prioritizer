@@ -24,22 +24,6 @@ STRESS_OPTIONS = {
     4: "Very often",
 }
 
-SATISFACTION_ITEM = (
-    "life_satisfaction",
-    "In general, how satisfied are you with all aspects of your life?",
-)
-
-YESTERDAY_ITEMS = [
-    ("happy_yesterday", "How happy did you feel yesterday?"),
-    ("laugh_yesterday", "How much did you laugh yesterday?"),
-    ("learn_yesterday", "Did you learn new or exciting things yesterday?"),
-    ("enjoy_yesterday", "How much did you enjoy the activities you did yesterday?"),
-    ("worried_yesterday", "How worried did you feel yesterday?"),
-    ("angry_yesterday", "How angry did you feel yesterday?"),
-    ("stress_yesterday", "How much stress did you feel yesterday?"),
-    ("lonely_yesterday", "How lonely or unsupported did you feel yesterday?"),
-]
-
 STRESS_ITEMS = [
     ("pss1", "been upset because of something that happened unexpectedly"),
     ("pss2", "felt that you were unable to control the important things in your life"),
@@ -63,10 +47,16 @@ ANXIETY_ITEMS = [
     ("gad7", "Feeling afraid, as if something awful might happen"),
 ]
 
-def make_example(life, yesterday, stress, anxiety):
-    values = {"life_satisfaction": life}
-    for (key, _), value in zip(YESTERDAY_ITEMS, yesterday):
-        values[key] = value
+ANSWER_OPTIONS = {
+    0: "Not at all",
+    1: "Several days",
+    2: "More than half the days",
+    3: "Nearly every day",
+}
+
+
+def make_example(stress, anxiety):
+    values = {}
     for (key, _), value in zip(STRESS_ITEMS, stress):
         values[key] = value
     for (key, _), value in zip(ANXIETY_ITEMS, anxiety):
@@ -74,22 +64,15 @@ def make_example(life, yesterday, stress, anxiety):
     return values
 
 
-EXAMPLE_LOW = make_example(8, [8, 7, 6, 8, 2, 1, 2, 1], [1, 1, 1, 3, 3, 1, 3, 3, 1, 1], [0, 0, 0, 0, 0, 0, 0])
-EXAMPLE_MIDDLE = make_example(5, [5, 4, 4, 5, 6, 4, 6, 5], [2, 2, 3, 2, 2, 2, 2, 2, 2, 2], [1, 1, 2, 1, 1, 1, 0])
-EXAMPLE_HIGH = make_example(2, [2, 1, 1, 2, 9, 6, 9, 8], [3, 4, 4, 1, 1, 4, 1, 1, 3, 4], [3, 3, 3, 2, 2, 2, 3])
+EXAMPLE_LOW = make_example([2, 2, 2, 3, 3, 2, 3, 3, 2, 2], [1, 1, 1, 1, 1, 1, 0])
+EXAMPLE_MIDDLE = make_example([3, 3, 3, 2, 2, 3, 2, 2, 3, 3], [1, 1, 1, 1, 1, 1, 1])
+EXAMPLE_HIGH = make_example([3, 3, 4, 2, 2, 3, 2, 1, 3, 3], [2, 2, 2, 2, 2, 2, 2])
 
 
 def load_example(values):
     for key, value in values.items():
         st.session_state[key] = value
 
-
-ANSWER_OPTIONS = {
-    0: "Not at all",
-    1: "Several days",
-    2: "More than half the days",
-    3: "Nearly every day",
-}
 
 st.set_page_config(page_title="Student Support Prioritizer")
 st.title("Student Support Prioritizer")
@@ -143,31 +126,22 @@ with phq_tab:
             with st.spinner("Writing the note..."):
                 note = main.explain_reasons(level, reasons, get_explainer_model())
             if note:
-                st.info(note)    
+                st.info(note)
 
 with prescreen_tab:
-    st.subheader("Pre-screen: who should be invited to complete the PHQ-9?")
+    st.subheader("Pre-screen: in which wave should this student be assessed?")
     st.caption(
-        "This tool does not detect depression. It suggests who to invite for the "
-        "PHQ-9. The counselor decides."
+        "This tool does not detect depression and does not decide who is assessed. "
+        "Every student is offered the PHQ-9. The pre-screen suggests the order. "
+        "The counselor decides."
     )
 
-    st.markdown("**Try an example** (made-up answers, not real students)")
+    st.markdown("**Try an example** (typical answer patterns, not individual students)")
     example_columns = st.columns(3)
-    example_columns[0].button("Low distress", on_click=load_example, args=(EXAMPLE_LOW,))
-    example_columns[1].button("In between", on_click=load_example, args=(EXAMPLE_MIDDLE,))
-    example_columns[2].button("High distress", on_click=load_example, args=(EXAMPLE_HIGH,))
+    example_columns[0].button("Typical wave 3", on_click=load_example, args=(EXAMPLE_LOW,))
+    example_columns[1].button("Typical wave 2", on_click=load_example, args=(EXAMPLE_MIDDLE,))
+    example_columns[2].button("Typical wave 1", on_click=load_example, args=(EXAMPLE_HIGH,))
     prescreen_values = {}
-
-    st.markdown("**Overall**")
-    key, text = SATISFACTION_ITEM
-    prescreen_values[key] = st.slider(
-        text + " (0 = not satisfied, 10 = totally satisfied)", 0, 10, 5, key=key
-    )
-
-    st.markdown("**Yesterday** (0 = at no time, 10 = all the time)")
-    for key, text in YESTERDAY_ITEMS:
-        prescreen_values[key] = st.slider(text, 0, 10, 5, key=key)
 
     st.markdown("**Stress in the last month**")
     st.caption("In the last month, how often have you...")
@@ -190,25 +164,43 @@ with prescreen_tab:
             horizontal=True,
             key=key,
         )
+
     st.divider()
     bundle = get_prescreen_bundle()
     answers_table = pd.DataFrame([prescreen_values])[bundle["features"]]
     probability = bundle["model"].predict_proba(answers_table)[0, 1]
+    wave = main.assign_wave(probability)
+    wave_info = main.WAVES[wave]
 
-    st.subheader("Suggestion")
-    if probability >= bundle["cutoff"]:
-        st.warning("The pre-screen suggests inviting this student to complete the PHQ-9.")
+    st.subheader("Suggested priority")
+    headline = wave_info["label"]
+    if wave == 1:
+        st.error(headline)
+    elif wave == 2:
+        st.warning(headline)
     else:
-        st.info("The pre-screen does not suggest an invitation for this student.")
+        st.info(headline)
+
+    st.write(f"**Screening:** {wave_info['screening']}")
+    st.write(f"**Session:** {wave_info['session']}")
+
     st.caption(
-        "Not suggested does not mean no risk. If a student mentions self-harm, do not "
+        "A later wave does not mean no risk. If a student mentions self-harm, do not "
         "wait for this tool: follow the crisis protocol. The counselor decides."
     )
 
     st.caption(
-        "Next step: if the student is invited, complete the PHQ-9 in the first tab. "
-        "That assigns the follow-up level, from 1 to 6."
+        "Next step: the PHQ-9 is completed in the first tab. That assigns the follow-up "
+        "level, from 1 to 6, and applies the crisis rule to item 9."
     )
-    with st.expander("The six follow-up levels"):
+
+    with st.expander("The three waves"):
+        for number, info in main.WAVES.items():
+            st.write(f"**{info['label']}**")
+            st.write(f"Screening: {info['screening']}")
+            st.write(f"Session: {info['session']}")
+            st.write("")
+
+    with st.expander("The six follow-up levels (after the PHQ-9)"):
         for number, info in main.LEVEL_INFO.items():
             st.write(f"Level {number}: {info['label']} (Protocol {info['protocol']})")
