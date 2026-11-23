@@ -32,44 +32,43 @@ PROTOCOLS = {
     "A": {
         "name": "Immediate safety follow-up",
         "crisis": True,
-        "text": """This student answered 2 or 3 on PHQ-9 item 9 (thoughts of being better off dead or of self-harm on more than half the days or nearly every day). No score is shown. A follow-up conversation is recommended.
-1. Contact the student: same day for level 1, within 24-48 hours for level 2.
-2. A trained counselor carries out a structured suicide risk assessment (for example the C-SSRS) and, where possible, consults a second trained colleague before deciding on the level of care.
-3. If the student shows immediate danger (a plan, intent, or access to means): do not leave them alone, remove means if it is safe to do so, and call emergency services (your local emergency number).
-4. Contact the parent or guardian according to institutional policy, and advise securing medications and other dangerous items.
-5. Complete a safety plan with the student: warning signs, coping strategies, supports, crisis line numbers.
-6. Refer to community mental health services with 24-hour access if needed, and obtain consent to share information with the providers.
-7. Document every contact and decision. Follow up within one week and again at one month.
-The counselor decides. This tool does not diagnose.""",
+        "steps": [
+            "A trained counselor carries out a structured suicide risk assessment (for example the C-SSRS) and, where possible, consults a second trained colleague before deciding on the level of care.",
+            "If the student shows immediate danger (a plan, intent, or access to means): do not leave them alone, remove means if it is safe to do so, and call emergency services (your local emergency number).",
+            "Contact the parent or guardian according to institutional policy, and advise securing medications and other dangerous items.",
+            "Complete a safety plan with the student: warning signs, coping strategies, supports, crisis line numbers.",
+            "Refer to community mental health services with 24-hour access if needed, and obtain consent to share information with the providers.",
+            "Document every contact and decision. Follow up within one week and again at one month.",
+        ],
     },
     "B": {
         "name": "Clinician review",
         "crisis": True,
-        "text": """This student answered 1 on PHQ-9 item 9 (such thoughts on several days). No score is shown. A follow-up conversation is recommended.
-1. A counselor reviews and contacts the student: within 3 days for level 3 (PHQ-9 total 15 or higher), within 4 days for level 4 (total 14 or lower). The order is a sorting aid, not a difference in risk.
-2. In the conversation, ask directly about suicidal thoughts and carry out a structured screening (for example the C-SSRS screener).
-3. If the screening suggests higher risk, move to Protocol A at once.
-4. If not, agree a safety plan where needed, share resources and counseling options, and involve the parent or guardian according to policy.
-5. Document the contact and the plan. Check in again within 2 weeks.
-The counselor decides. This tool does not diagnose.""",
+        "steps": [
+            "In the conversation, ask directly about suicidal thoughts and carry out a structured screening (for example the C-SSRS screener).",
+            "If the screening suggests higher risk, move to Protocol A at once.",
+            "If not, agree a safety plan where needed, share resources and counseling options, and involve the parent or guardian according to policy.",
+            "Document the contact and the plan. Check in again within 2 weeks.",
+        ],
     },
     "C": {
         "name": "Support and check-in",
         "crisis": False,
-        "text": """The student answered 0 on PHQ-9 item 9, so the PHQ-9 total is shown above.
-1. Level 5 (PHQ-9 total 15 or higher): offer a check-in conversation and information about support services. A high total without a crisis answer still calls for a timely, scheduled check-in. This tool only sorts the order.
-2. Level 6 (total 14 or lower): standard support. Share wellbeing resources.
-3. An answer of 0 does not rule out risk. If a concern arises later from the student or anyone else, use Protocol A or B at any time.
-The counselor decides. This tool does not diagnose.""",
+        "steps": [
+            {
+                5: "Offer a check-in conversation and information about support services. A high total without a crisis answer still calls for a timely, scheduled check-in. This tool only sorts the order.",
+                6: "Standard support. Share wellbeing resources.",
+            },
+        ],
     },
 }
 
 LEVEL_INFO = {
-    1: {"protocol": "A", "label": "Same day"},
-    2: {"protocol": "A", "label": "Within 24-48 hours"},
-    3: {"protocol": "B", "label": "Priority review"},
-    4: {"protocol": "B", "label": "Scheduled review"},
-    5: {"protocol": "C", "label": "Check-in offered"},
+    1: {"protocol": "A", "label": "Contact the same day"},
+    2: {"protocol": "A", "label": "Contact within 24-48 hours"},
+    3: {"protocol": "B", "label": "Review and contact within 3 days"},
+    4: {"protocol": "B", "label": "Review and contact within 4 days"},
+    5: {"protocol": "C", "label": "Offer check-in"},
     6: {"protocol": "C", "label": "Standard"},
 }
 
@@ -96,6 +95,8 @@ Rules:
 
 
 NOTE_UNAVAILABLE = "A note could not be generated. The items scored high are listed below."
+
+ITEM9_SENTENCE = "The student also answered above 0 on PHQ-9 item 9 (thoughts of being better off dead or of self-harm)."
 
 
 EXAMPLES = [
@@ -169,6 +170,18 @@ def assign_level(item9: int, total: int) -> int:
     return 6
 
 
+def protocol_steps(level: int) -> list:
+    protocol = PROTOCOLS[LEVEL_INFO[level]["protocol"]]
+    steps = []
+    for step in protocol["steps"]:
+        if isinstance(step, dict):
+            if level in step:
+                steps.append(step[level])
+        else:
+            steps.append(step)
+    return steps
+
+
 def get_reasons(row) -> list:
     reasons = []
     if row["phq9"] >= 1:
@@ -186,13 +199,15 @@ def build_explainer_model():
 
 def explain_reasons(level: int, reasons: list, model) -> str | None:
     protocol = LEVEL_INFO[level]["protocol"]
-    if PROTOCOLS[protocol]["crisis"]:
-        return None
-    if PHQ_NAMES[9] in reasons:
-        return None
-    if not reasons:
+    item9_flagged = PHQ_NAMES[9] in reasons
+    other_reasons = [name for name in reasons if name != PHQ_NAMES[9]]
+
+    if not other_reasons:
+        if item9_flagged:
+            return ITEM9_SENTENCE
         return "No individual item scored high."
-    items = [SHORT_NAMES.get(name, name.lower()) for name in reasons]
+
+    items = [SHORT_NAMES.get(name, name.lower()) for name in other_reasons]
     level_label = f"Level {level} ({PROTOCOLS[protocol]['name']})"
     messages = [SystemMessage(content=SYSTEM_PROMPT)]
     for example_input, example_output in EXAMPLES:
@@ -200,10 +215,14 @@ def explain_reasons(level: int, reasons: list, model) -> str | None:
         messages.append(AIMessage(content=example_output))
     messages.append(HumanMessage(content=f"{level_label}. Items scored high: {'; '.join(items)}."))
     try:
-        return model.invoke(messages).text
+        note = model.invoke(messages).text
     except Exception as error:
         print("Explainer failed:", type(error).__name__)
-        return NOTE_UNAVAILABLE
+        note = NOTE_UNAVAILABLE
+
+    if item9_flagged:
+        return f"{note} {ITEM9_SENTENCE}"
+    return note
 
 
 def add_phq_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -225,19 +244,19 @@ PRIORITISE_THRESHOLD = WAVE_BOUNDARIES[2]
 
 WAVES = {
     1: {
-        "label": "First wave",
+        "label": "Wave 1",
         "screening": "Immediately administer PHQ-9.",
         "session": "Immediately invite for a session and administer C-SSRS.",
     },
     2: {
-        "label": "Second wave",
+        "label": "Wave 2",
         "screening": "Immediately administer PHQ-9.",
         "session": "Invite for a session and administer C-SSRS after the first wave, guided by the results of those assessments.",
     },
     3: {
-        "label": "Third wave",
+        "label": "Wave 3",
         "screening": "PHQ-9 offered as part of standard screening.",
-        "session": "A session if the PHQ-9 indicates one, or if the student asks.",
+        "session": "Invite for a session depending on the PHQ-9 score or if the student requests one.",
     },
 }
 

@@ -219,4 +219,4 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .vscode/
-data/DATASET-Raw_data_clean.csv
+data/DATASET-Raw_data_clean.csv.DS_Store
