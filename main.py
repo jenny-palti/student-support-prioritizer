@@ -82,7 +82,7 @@ SHORT_NAMES = {
     PHQ_NAMES[8]: "moving or speaking very slowly or being restless",
 }
 
-SYSTEM_PROMPT = """You write a short note for a university counselor.
+SYSTEM_PROMPT = """You write a short note for a counselor.
 You receive a follow-up level and a list of PHQ-9 items that a student scored high on.
 Write one or two plain sentences that restate those items and say that a follow-up conversation is recommended.
 Rules:

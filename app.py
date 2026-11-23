@@ -1,7 +1,10 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
+
 import pandas as pd
 import streamlit as st
 import main
+import guidance
 
 try:
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -15,6 +18,21 @@ def get_explainer_model():
 @st.cache_resource
 def get_prescreen_bundle():
     return main.load_model()
+
+@st.cache_resource
+def get_guidance_index():
+    try:
+        return guidance.build_guidance_index()
+    except Exception as error:
+        print("Guidance index failed:", type(error).__name__)
+        return None
+
+@st.cache_data(show_spinner=False)
+def get_reading(level):
+    index = get_guidance_index()
+    if index is None:
+        return []
+    return guidance.find_reading(level, index)
 
 STRESS_OPTIONS = {
     0: "Never",
@@ -64,6 +82,24 @@ BAND_COLORS = {
 
 ITEM9_COLORS = {0: "blue", 1: "orange", 2: "red", 3: "red"}
 
+CLAMP_STYLE = (
+    "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden"
+)
+
+
+def build_case_recap(item9, total, band, level):
+    info = main.LEVEL_INFO[level]
+    protocol = main.PROTOCOLS[info["protocol"]]
+    step_count = len(main.protocol_steps(level))
+    plural = "s" if step_count != 1 else ""
+    return (
+        f"Item 9: {ANSWER_OPTIONS[item9]} ({item9}). "
+        f"PHQ-9 total {total} of 27, {band.lower()}. "
+        f"Level {level}, Protocol {info['protocol']} "
+        f"({protocol['name'].lower()}) — {info['label'].lower()}. "
+        f"{step_count} protocol step{plural} apply."
+    )
+
 
 def make_example(stress, anxiety):
     values = {}
@@ -84,12 +120,12 @@ def make_phq_example(values):
 
 
 PHQ_EXAMPLES = {
-    1: make_phq_example([2, 2, 2, 1, 1, 2, 1, 0, 3]),
-    2: make_phq_example([2, 2, 1, 1, 1, 1, 1, 0, 2]),
-    3: make_phq_example([3, 2, 2, 2, 2, 2, 1, 0, 1]),
-    4: make_phq_example([2, 1, 1, 1, 1, 1, 1, 0, 1]),
-    5: make_phq_example([3, 2, 2, 2, 2, 2, 2, 0, 0]),
-    6: make_phq_example([2, 1, 1, 1, 0, 1, 1, 0, 0]),
+    1: make_phq_example([3, 3, 3, 3, 2, 2, 1, 1, 3]),
+    2: make_phq_example([2, 2, 2, 1, 1, 1, 1, 0, 2]),
+    3: make_phq_example([3, 3, 2, 2, 2, 2, 1, 1, 1]),
+    4: make_phq_example([2, 2, 1, 1, 1, 0, 0, 0, 1]),
+    5: make_phq_example([3, 3, 3, 3, 3, 3, 2, 1, 0]),
+    6: make_phq_example([2, 1, 0, 0, 0, 0, 0, 0, 0]),
 }
 
 
@@ -185,12 +221,36 @@ with phq_tab:
     else:
         st.write("No individual item scored high.")
 
-    if reasons:
-        if st.button("Generate summary"):
-            with st.spinner("Writing the summary..."):
-                note = main.explain_reasons(level, reasons, get_explainer_model())
-            if note:
-                st.info(note)
+    reading = get_reading(level)
+    if reading:
+        st.markdown("**Suggested further reading and resources**")
+        for item in reading:
+            with st.container(border=True):
+                st.markdown(f"**{item['topic'][0].upper()}{item['topic'][1:]}**")
+                st.markdown(
+                    f'<div style="{CLAMP_STYLE}">{item["text"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"Source: {item['source']}")
+                if item["link"]:
+                    st.link_button("Read more", item["link"])
+
+    if st.button("Generate summary"):
+        with st.spinner("Writing the summary..."):
+            model = get_explainer_model()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                student_job = (
+                    pool.submit(main.explain_reasons, level, reasons, model) if reasons else None
+                )
+                sources_job = pool.submit(guidance.summarise_reading, level, reading, model)
+                student_note = student_job.result() if student_job else ""
+                sources_note = sources_job.result()
+        recap = build_case_recap(item9, total, band, level)
+        st.markdown("**This student's answers**")
+        st.info(f"{recap}\n\n{student_note}".strip())
+        if sources_note:
+            st.markdown("**What the sources say**")
+            st.info(sources_note)
 
     with st.expander("The six follow-up levels"):
         for number, info in main.LEVEL_INFO.items():
@@ -206,9 +266,9 @@ with prescreen_tab:
     with st.container(border=True):
         st.markdown("**Try an example** (typical answer patterns, not individual students)")
         example_columns = st.columns(3)
-        example_columns[0].button("Typical wave 3", on_click=load_example, args=(EXAMPLE_LOW,))
+        example_columns[0].button("Typical wave 1", on_click=load_example, args=(EXAMPLE_HIGH,))
         example_columns[1].button("Typical wave 2", on_click=load_example, args=(EXAMPLE_MIDDLE,))
-        example_columns[2].button("Typical wave 1", on_click=load_example, args=(EXAMPLE_HIGH,))
+        example_columns[2].button("Typical wave 3", on_click=load_example, args=(EXAMPLE_LOW,))
 
     prescreen_values = {}
 
