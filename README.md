@@ -14,7 +14,7 @@ The tool works in two stages.
 
 **Stage 1: priority ordering.** A logistic regression model reads 17 answers the student has already given on two standard questionnaires — the PSS-10 stress scale and the GAD-7 anxiety scale — and places the student in one of three waves. The waves tell a counselor who to work through first. The app shows the wave and what to do in it. It never shows a probability, a percentage or a risk score.
 
-**Stage 2: PHQ-9 follow-up.** Fixed rules turn the nine PHQ-9 answers into one of six follow-up levels and one of three protocols. Each result lists which items scored high, so the counselor can see why a student was flagged. For the support protocol only, a Gemini model can write a short plain-language note restating those items.
+**Stage 2: PHQ-9 follow-up.** Fixed rules turn the nine PHQ-9 answers into one of six follow-up levels and one of three protocols. Each result lists which items scored high, so the counselor can see why a student was flagged, alongside up to three passages of published guidance retrieved for that level. A button produces a short summary of both.
 
 ### The three waves
 
@@ -22,7 +22,7 @@ The tool works in two stages.
 |---|---|---|
 | First | Immediately administer PHQ-9. | Immediately invite for a session and administer C-SSRS. |
 | Second | Immediately administer PHQ-9. | Invite for a session and administer C-SSRS after the first wave, guided by the results of those assessments. |
-| Third | PHQ-9 offered as part of standard screening. | A session if the PHQ-9 indicates one, or if the student asks. |
+| Third | PHQ-9 offered as part of standard screening. | Invite for a session depending on the PHQ-9 score or if the student requests one. |
 
 The C-SSRS sits in the session and not in the screening, because it is administered by an interviewer.
 
@@ -32,23 +32,24 @@ The C-SSRS sits in the session and not in the screening, because it is administe
 
 | Level | Label | PHQ-9 answers | Protocol |
 |---|---|---|---|
-| 1 | Same day | item 9 = 3 | A: Immediate safety follow-up |
-| 2 | Within 24-48 hours | item 9 = 2 | A: Immediate safety follow-up |
-| 3 | Priority review | item 9 = 1 and total 15 or higher | B: Clinician review |
-| 4 | Scheduled review | item 9 = 1 and total 14 or lower | B: Clinician review |
-| 5 | Check-in offered | item 9 = 0 and total 15 or higher | C: Support and check-in |
+| 1 | Contact the same day | item 9 = 3 | A: Immediate safety follow-up |
+| 2 | Contact within 24-48 hours | item 9 = 2 | A: Immediate safety follow-up |
+| 3 | Review and contact within 3 days | item 9 = 1 and total 15 or higher | B: Clinician review |
+| 4 | Review and contact within 4 days | item 9 = 1 and total 14 or lower | B: Clinician review |
+| 5 | Offer check-in | item 9 = 0 and total 15 or higher | C: Support and check-in |
 | 6 | Standard | item 9 = 0 and total 14 or lower | C: Support and check-in |
 
-The split between levels 3 and 4 is a sorting aid, not a difference in risk.
+The split between levels 3 and 4 is a sorting aid, not a difference in risk. Levels 1 and 2, and levels 3 and 4, show identical protocol steps; the label is the difference.
 
 ## Safety design
 
-- **Crisis rule.** If item 9 is above 0, the app shows the escalation protocol and **no score**.
+- **Crisis rule.** If item 9 is above 0, the app shows the escalation protocol for that level, and the protocol governs the response. The PHQ-9 total is shown beside it as context rather than as a substitute: a counselor who is told the decision is theirs should not be asked to make it with half the data withheld.
 - **The most important signal is a rule, not a model.** Item 9 is read directly from the student's own answer. A model can be wrong in the direction that costs a life, so nothing about the crisis path depends on a prediction.
-- **No language model near a crisis.** Protocols A and B use fixed text only. The Gemini note exists only for Protocol C, and the code blocks it even there if item 9 appears in the list.
-- **The ordering model cannot see item 9**, so it cannot detect a crisis. A third-wave placement never means "no risk", and the app says so every time.
+- **The language model never sees item 9.** It is removed from the list sent to Gemini, and the sentence reporting the student's item 9 answer is fixed text written by code and added afterwards. The model cannot paraphrase, soften or invent the most sensitive fact in the tool. If item 9 is the only item that scored high, no model call is made at all.
+- **The ordering model cannot see item 9**, so it cannot detect a crisis. A third-wave placement never means "no risk".
+- **Nothing a counselor reads as guidance was written by a model.** The further-reading passages come from a fixed corpus that was reviewed before it shipped.
 - The protocol texts were adapted from school suicide-intervention procedures (Mental Health Commission of Canada national guide, NYSED, Pasadena USD, Sherwood SD) and reviewed and finalized by the author, who has a clinical psychology background. The timeframes are the author's own choices.
-- The counselor decides. The app asks users not to enter names or identifying details.
+- The counselor decides.
 
 ## Data
 
@@ -70,7 +71,7 @@ The split between levels 3 and 4 is a sorting aid, not a difference in risk.
 - **Split:** 80% training (2,393 students, 661 of them answered above 0 on item 9), 20% test (599), stratified, `random_state=42`.
 - **Model:** logistic regression — readable weights, no overfitting, and fast enough to retrain in seconds. An earlier stage of the project compared it against a random forest on the previous target; the two were tied in cross-validation and the random forest overfitted (training accuracy 1.00), so logistic regression was chosen and that choice was kept.
 - **Wave boundaries:** probability 0.50 and 0.30. Above 0.50 is the first wave, 0.30 to 0.50 the second, below 0.30 the third.
-- **No neural network, no vector database.** With 2,992 rows and 17 inputs, logistic regression performs as well as the alternatives and is far easier to explain. There was no document collection that needed searching.
+- **No neural network.** With 2,992 rows and 17 inputs, logistic regression performs as well as the alternatives and is far easier to explain.
 
 ### Why 17 questions to decide whether to ask 9
 
@@ -152,30 +153,43 @@ The Icesi survey defines no scoring system of its own; its codebook gives respon
 
 **One caveat worth stating plainly.** The PSS-10 bands used here (0-13 low, 14-26 moderate, 27-40 high) are a widely repeated convention from templates and trial documents, not validated clinical cut-points in the way the GAD-7's are. They are used for description only, and nothing in the tool depends on them.
 
-## Explainer (Gemini, Protocol C only)
+## Explainer (Gemini)
 
-- Gemini (`gemini-3.5-flash-lite`) through LangChain turns the stored list of high-scoring items into one or two neutral sentences. It adds nothing new.
+- Gemini (`gemini-3.5-flash-lite`) through LangChain turns the stored list of high-scoring items into one or two neutral sentences. It adds nothing new. It runs on all six levels.
 - **Prompt engineering:** a system prompt with six rules (use only the items given; no diagnosis or cause; no prediction or treatment; no mention of suicide or self-harm; never the word "depression"; neutral tone) and two few-shot examples.
-- **Guards in code:** crisis protocols never call the model; a list containing item 9 never calls it; an empty list returns a fixed sentence; any error returns a fixed fallback text; a 30-second timeout is set.
-- **Testing:** five hand-written cases with a banned-word check, 13 real dataset rows, and failure and timeout tests. The author read every note. This is a small test, and the wording can vary slightly between runs.
+- **Guards in code:** item 9 is removed from the list before the call and its sentence is appended afterwards by code, so the model never receives or mentions it; if item 9 is the only item that scored high, no call is made; an empty list returns a fixed sentence; any error returns a fixed fallback text; a 30-second timeout is set.
+- **Testing:** five hand-written cases with a banned-word check, 13 real dataset rows, and failure and timeout tests. The author read every note. This is a small test, it predates the widening of the explainer from one protocol to all six levels, and the wording can vary slightly between runs.
 - The note appears only when the counselor presses a button, and the list of items stays next to it so the note can be checked against its source.
+
+## Suggested further reading (retrieval)
+
+Each follow-up level shows up to three passages of published guidance chosen for that level's protocol steps.
+
+- **Corpus:** 20 passages in `data/guidance.json`, each with a source, a topic and two to four sentences, paraphrased from six published documents — the NYSED guide for school personnel, Pasadena USD, School Mental Health Ontario, AFSP's K-12 guidance, the JED Foundation faculty guide, and the PHQ-9's own scoring guidance. Every passage was read and approved before it shipped, and each box links to its source document.
+- **Retrieval.** The passages are embedded once at start-up with Gemini (`gemini-embedding-001`, task type `retrieval_document`); each protocol step is embedded as a query (`retrieval_query`); the closest passage to each step is found by cosine similarity over a NumPy array.
+- **No vector database, deliberately.** With 20 passages, a FAISS flat index performs exactly the same exhaustive comparison as a dot product, so the dependency would add deployment risk and nothing else. The decision is recorded here rather than hidden.
+- **A similarity floor of 0.68.** Retrieval always returns its nearest passage, even when nothing relevant exists, so anything scoring below the floor is not shown and a level can legitimately display nothing. One protocol step — "if the screening suggests higher risk, move to Protocol A at once" — describes the tool's own internal routing and has no published guidance behind it. It scores 0.677 and is correctly suppressed.
+- **The floor was measured, not guessed.** Every protocol step was scored against every passage before any threshold was chosen. The lowest genuine match scores 0.684 and the highest false one 0.677, so the floor sits between them. At 15 passages those two were the wrong way round — the false match outscored two real ones — which is why the corpus was extended to 20.
+- **Optional summary.** A button sends only the retrieved passages to Gemini and asks for two to four sentences using nothing but those passages, with an instruction to say so if they do not address the steps. The passages stay on screen beside the summary so it can be checked against its source.
 
 ## Tech stack
 
-Python, pandas, SciPy, scikit-learn, Matplotlib and Seaborn (figures, in the notebook), LangChain with Google Gemini, Streamlit, Streamlit Community Cloud, Git and GitHub.
+Python, pandas, NumPy, SciPy, scikit-learn, Matplotlib and Seaborn (figures, in the notebook), LangChain with Google Gemini, Streamlit, Streamlit Community Cloud, Git and GitHub.
 
 ## Project structure
 
 ```
 app.py                    Streamlit app (PHQ-9 tab and pre-screen tab)
 main.py                   PHQ-9 rules, protocols, model training, explainer
+guidance.py               Guidance corpus, embeddings, retrieval, summary
 choose_cutoff.py          Cross-validated sweep used to set the wave boundaries
 stage3_new_dataset.ipynb  Data exploration, cleaning, statistics, model comparison
 models/                   Saved pre-screen model
 figures/                  Charts used in the analysis
-data/                     Codebook
+data/                     Codebook and the guidance corpus (guidance.json)
 test_explainer.py         Tests for the explainer
 test_gemini.py            First connection and prompt tests
+EVIDENCE.md               Results, safety design and limitations on one page
 requirements.txt          Packages needed to run the app
 ```
 
@@ -183,11 +197,11 @@ requirements.txt          Packages needed to run the app
 
 1. Clone the repository and create a virtual environment.
 2. Install the packages: `pip install -r requirements.txt`
-3. Create a file named `.env` containing `GOOGLE_API_KEY=your-key` (never commit this file). Without a key the app still works, and the note shows a fixed fallback text.
+3. Create a file named `.env` containing `GOOGLE_API_KEY=your-key` (never commit this file). Without a key the app still works: the note shows a fixed fallback text and the further-reading section is hidden.
 4. Run the app: `streamlit run app.py`
-5. To retrain the model: put the cleaned survey file at `data/DATASET-Raw_data_clean.csv` and run `python main.py`. To reproduce the boundary sweep, run `python choose_cutoff.py`. The notebook also needs jupyter, matplotlib, seaborn and scipy.
+5. To retrain the model: put the cleaned survey file at `data/DATASET-Raw_data_clean.csv` and run `python main.py`. To reproduce the boundary sweep, run `python choose_cutoff.py`. To print the similarity scores behind the floor, run `python guidance.py`. The notebook also needs jupyter, matplotlib, seaborn and scipy.
 
-Note that the app caches the loaded model in memory. After retraining and redeploying, restart the app so it picks up the new file.
+Note that the app caches the loaded model and the guidance index in memory. After retraining or changing the corpus and redeploying, restart the app so it picks up the new files.
 
 ## Ethics and limitations
 
@@ -197,10 +211,11 @@ Note that the app caches the loaded model in memory. After retraining and redepl
 - **Bias.** Leaving gender, socioeconomic code and ethnicity out of the inputs does not guarantee equal results. Recall is lower for gender code 1 (0.62 against 0.81), and some groups are too small to assess at all.
 - **No probability is ever shown in the app.** The within-wave rates reported above are documentation, not something a counselor sees. Telling a counselor that a given share of a wave answered above 0 would disclose inferred sensitive information about an individual student.
 - **Data limits.** One university, one voluntary survey in 2022, self-reported answers. A PHQ-9 total is a screening result, not a diagnosis. The survey may include minors.
-- **Privacy.** The survey data is anonymous, so the protocols are demonstrated on data that cannot be linked to a person. A real deployment would need consent and an identified process. The app asks users not to enter identifying details, and the demo uses only typical answer patterns rather than real students.
+- **Privacy.** The survey data is anonymous, so the protocols are demonstrated on data that cannot be linked to a person. A real deployment would need consent and an identified process. The demo uses only typical answer patterns rather than real students, and the app is intended for trained counselors who will be briefed before using it.
 - **Item 9 is imperfect.** It misses some people who do not report such thoughts, which is why the follow-up conversation, and not the score, is the safeguard.
-- **The language model can phrase things wrongly.** That is why it is limited to the support protocol, receives only item names, is guarded in code, and is checked by the counselor against the item list.
-- **Public demo.** Anyone with the link can press the note button and use the free Gemini quota. If it runs out, the note falls back to fixed text and the rest keeps working.
+- **The language model can phrase things wrongly.** That is why it receives only item names and never item 9, is guarded in code, and is checked by the counselor against the item list beside it. Where it summarises published guidance, it is given only the retrieved passages and those passages stay on screen next to what it writes.
+- **The retrieval corpus is small.** Twenty passages, unevenly distributed: levels 1 to 4 draw on crisis-response material and levels 5 and 6 on a handful of non-crisis passages. The margin between the lowest genuine match and the highest false one is 0.007. Extending the corpus, particularly for non-crisis support, is the obvious next step.
+- **Public demo.** Anyone with the link can press the summary button and use the free Gemini quota. If it runs out, the note falls back to fixed text and the rest keeps working.
 - **A real deployment** must insert the institution's own emergency and crisis numbers in place of the placeholder wording in the protocols.
 
 ## Author
